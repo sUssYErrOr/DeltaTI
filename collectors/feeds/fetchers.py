@@ -1,13 +1,15 @@
 import os
+import io
 import logging
 import base64
 import time
 import requests
+import zipfile
 from requests.exceptions import HTTPError, RequestException
-
-from utils.file_utils import save_to_file
 from utils.config_utils import load_config, ConfigLoadError
+from utils.file_utils import save_to_file
 from utils.env_utils import get_otx_key
+from datetime import datetime
 
 # Logger setup
 logger = logging.getLogger(__name__)
@@ -56,6 +58,8 @@ def safe_get(url, headers=None, retries=3, backoff=2):
                 logger.error(f"[Retry] All {retries} attempts failed for {url}")
                 raise
 
+
+
 def fetch_urlhaus_csv_online():
     logger.info("[URLhaus] Starting fetch...")
     url = "https://urlhaus.abuse.ch/downloads/csv_online/"
@@ -68,18 +72,35 @@ def fetch_urlhaus_csv_online():
 
 
 def fetch_threatfox():
-    logger.info("[ThreatFox] Starting fetch...")
-    url = "https://threatfox-api.abuse.ch/api/v1/"
-    try:
-        resp = session.post(url, json={"query": "get_iocs", "limit": 300}, timeout=30)
-        resp.raise_for_status()
-        save_to_file("threatfox", resp.json())
-        logger.info("[ThreatFox] Fetch completed successfully.")
-    except HTTPError:
-        logger.error(f"[ThreatFox] HTTP {resp.status_code} error: {resp.text[:200]!r}")
-    except RequestException:
-        logger.exception("[ThreatFox] Fetch failed")
+    logger.info("[ThreatFox] Starting ZIP fetch...")
 
+    url = "https://threatfox.abuse.ch/export/csv/full/"
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+
+        if "application/zip" not in resp.headers.get("Content-Type", ""):
+            logger.error(f"[ThreatFox] Unexpected content type: {resp.headers.get('Content-Type')}")
+            return
+
+        # Read ZIP into memory
+        zip_bytes = io.BytesIO(resp.content)
+        with zipfile.ZipFile(zip_bytes, 'r') as zip_ref:
+            file_list = zip_ref.namelist()
+            if not file_list:
+                logger.error("[ThreatFox] ZIP archive is empty.")
+                return
+
+            csv_name = file_list[0]
+            with zip_ref.open(csv_name) as csv_file:
+                csv_data = csv_file.read().decode("utf-8")
+            save_to_file("threatfox_full", csv_data, "csv")
+            logger.info(f"[ThreatFox] CSV extracted")
+
+    except requests.exceptions.RequestException:
+        logger.exception("[ThreatFox] ZIP fetch failed")
+    except zipfile.BadZipFile:
+        logger.exception("[ThreatFox] Failed to extract ZIP")
 
 def fetch_feodo():
     logger.info("[Feodo] Starting fetch...")
@@ -92,7 +113,7 @@ def fetch_feodo():
         logger.exception("[Feodo] Fetch failed")
 
 
-def fetch_phishtank():
+def fetch_phishtank(): # NOT WORKING EVERY TIME, IT DEPENDS ON THE CONNECTION OF THE SERVER
     logger.info("[PhishTank] Starting fetch...")
     url = "http://data.phishtank.com/data/online-valid.csv"
     try:
@@ -161,11 +182,8 @@ def fetch_ciarmy():
     except RequestException:
         logger.exception("[CI Army] Fetch failed")
 
-def encode_url_to_id(url: str) -> str:
-    return base64.urlsafe_b64encode(url.encode()).decode().strip("=")
-
 '''
-def fetch_abuseipdb():
+def fetch_abuseipdb(): # NEED SUBSCRIPTION
     logger.info("[AbuseIPDB] Starting fetch...")
     api_key = os.getenv("ABUSEIPDB_KEY")
     if not api_key:

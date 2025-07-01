@@ -9,3 +9,5 @@ def get_otx_key() -> str:
         raise EnvironmentError("OTX_API_KEY is not set in .env")
     return key
 
+
+

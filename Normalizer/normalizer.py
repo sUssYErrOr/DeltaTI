@@ -21,11 +21,11 @@ normalized_dir.mkdir(parents=True, exist_ok=True)
 
 # Regular expression patterns for IOCs
 IOC_PATTERNS = {
-    'ipv4-addr': re.compile(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"),
-    'url': re.compile(r"\bhttps?://[^\s,'\"]+\b"),
-    'file-sha256': re.compile(r"\b[A-Fa-f0-9]{64}\b"),
-    'file-sha1': re.compile(r"\b[A-Fa-f0-9]{40}\b"),
-    'file-md5': re.compile(r"\b[A-Fa-f0-9]{32}\b")
+    'ipv4-addr': re.compile(r"\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b"),
+    'url': re.compile(r"\\bhttps?://[^\\s,'\"]+\\b"),
+    'file-sha256': re.compile(r"\\b[A-Fa-f0-9]{64}\\b"),
+    'file-sha1': re.compile(r"\\b[A-Fa-f0-9]{40}\\b"),
+    'file-md5': re.compile(r"\\b[A-Fa-f0-9]{32}\\b")
 }
 
 # Helper functions
@@ -62,28 +62,14 @@ def normalize_urlhaus(path: Path) -> List[Dict]:
             for r in rows if r.get('url')]
 
 def normalize_threatfox(path: Path) -> List[Dict]:
-    data = load_json(path)
-    if not data:
-        logger.warning(f"No data returned from JSON file: {path}")
-        return []
-
     records: List[Dict] = []
-
-    if isinstance(data, dict):
-        entries = data.get('results', [])
-    elif isinstance(data, list):
-        entries = data
-    else:
-        logger.warning(f"Unexpected type for ThreatFox feed: {type(data)} in file: {path}")
-        return []
-
-    for e in entries:
-        val = e.get('ioc_string') or e.get('ioc')
+    rows = parse_csv(path)
+    for r in rows:
+        val = r.get('ioc') or r.get('ioc_value') or r.get('ioc_string')
         if not val:
             continue
-        ioc_type = e.get('ioc_type') or 'unknown'
-        records.append(build_record(val, ioc_type, 'threatfox', e))
-
+        ioc_type = r.get('ioc_type') or 'unknown'
+        records.append(build_record(val, ioc_type, 'threatfox', r))
     return records
 
 def normalize_txt_list(path: Path, source: str, ioc_type: str = 'ipv4-addr') -> List[Dict]:

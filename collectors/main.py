@@ -1,92 +1,132 @@
+#!/usr/bin/env python3
 """
 main.py
 
 Entry point for DeltaTI Collector + Normalizer pipeline.
-Schedules fetch jobs, then triggers normalization upon completion.
+Schedules fetch jobs and triggers normalization upon completion.
 """
+
 import sys
 import time
 import logging
 from pathlib import Path
+from typing import Callable
 import schedule
 
-# Set up root path for module imports
-project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root))
+# Constants
+SCHEDULE_TIME = "22:00"
+SLEEP_INTERVAL = 30  # seconds
+HEARTBEAT_INTERVAL = 300  # seconds (5 minutes)
 
-# Imports from DeltaTI modules
+# --- Set up project root for module imports ---
+try:
+    project_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(project_root))
+except Exception as e:
+    raise RuntimeError("Failed to resolve project root") from e
+
+# --- DeltaTI Module Imports ---
 from collectors.feeds.fetchers import FEED_REGISTRY
 from Normalizer.normalizer import normalize_all
 from collectors.utils.file_utils import ensure_data_dir
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
 
-def run_pipeline(job_func):
+# --- Configure Logging ---
+logger = logging.getLogger("DeltaTI")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+for handler in list(logger.handlers):
+    logger.removeHandler(handler)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s - %(message)s'))
+logger.addHandler(stream_handler)
+
+def run_pipeline(job_func_name: str) -> None:
     """
-    Run a fetch job followed by a normalization process.
+    Executes a feed fetching job followed by normalization.
 
     Args:
-        job_func (Callable): A function that fetches a feed.
+        job_func_name (str): The name of the job function in FEED_REGISTRY.
     """
+    job_func: Callable | None = next((j for j in FEED_REGISTRY if j.__name__ == job_func_name), None)
+
+    if not job_func:
+        logger.error(f"[Error] Job function '{job_func_name}' not found in registry.")
+        return
+
+    logger.info(f"[Fetch] Starting job: {job_func.__name__}")
     try:
-        logger.info(f"Starting fetch job: {job_func.__name__}")
         job_func()
+        logger.info(f"[Fetch] Completed job: {job_func.__name__}")
     except Exception as fetch_error:
-        logger.exception(f"Fetch failed: {job_func.__name__}: {fetch_error}")
+        logger.exception(f"[Fetch] Failed: {job_func.__name__}: {fetch_error}")
+
+    logger.info("[Normalize] Starting normalization...")
+    try:
+        normalize_all()
+        logger.info(f"[Normalize] Normalization completed for job: {job_func.__name__}")
+    except Exception as norm_error:
+        logger.exception(f"[Normalize] Failed: {norm_error}")
+
+
+def schedule_jobs() -> None:
+    """
+    Schedules each job in FEED_REGISTRY to run daily at the specified time.
+    """
+    logger.info(f"[Scheduler] Scheduling jobs at {SCHEDULE_TIME} daily...")
+    for job in FEED_REGISTRY:
+        job_name = job.__name__
+        schedule.every().day.at(SCHEDULE_TIME).do(lambda jn=job_name: run_pipeline(jn))
+        logger.info(f"[Scheduler] Scheduled job '{job_name}' at {SCHEDULE_TIME}")
+
+
+def initial_run() -> None:
+    """
+    Executes all jobs once at startup to populate initial data.
+    """
+    logger.info("[Startup] Running initial data collection and normalization...")
+    for job in FEED_REGISTRY:
+        run_pipeline(job.__name__)
+
+
+def run_scheduler() -> None:
+    """
+    Continuously runs scheduled tasks, logs after jobs, and logs status every 5 minutes.
+    """
+    logger.info("[Runtime] Scheduler started. Awaiting scheduled jobs...")
+    last_heartbeat = time.time()
 
     try:
-        logger.info("Starting normalization run...")
-        normalize_all()
-    except Exception as norm_error:
-        logger.exception(f"Normalization run failed: {norm_error}")
+        while True:
+            ran_job = schedule.run_pending()
 
-def schedule_jobs(interval_hours=2):
-    """
-    Schedule each feed job with the specified interval.
+            if ran_job:
+                logger.info("[Status] A scheduled job has just completed.")
 
-    Args:
-        interval_hours (int): Interval in hours to run the jobs.
-    """
-    for job in FEED_REGISTRY:
-        schedule.every(interval_hours).hours.do(run_pipeline, job)
-        logger.info(f"Scheduled job {job.__name__} every {interval_hours} hours.")
+            if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
+                logger.info("[Heartbeat] Collector is working normally...")
+                last_heartbeat = time.time()
 
-def initial_run():
-    """
-    Run all feed jobs once on startup.
-    """
-    for job in FEED_REGISTRY:
-        run_pipeline(job)
+            time.sleep(SLEEP_INTERVAL)
 
-def run_scheduler():
-    """
-    Run the scheduler to manage periodic feed and normalization tasks.
-    """
-    logger.info("Collector + Normalizer started; awaiting scheduled runs...")
-    while True:
-        try:
-            schedule.run_pending()
-            time.sleep(30)
-        except KeyboardInterrupt:
-            logger.info("Shutting down scheduler.")
-            break
-        except Exception as scheduler_error:
-            logger.exception(f"Unexpected error in scheduler: {scheduler_error}")
+    except KeyboardInterrupt:
+        logger.info("[Shutdown] Scheduler interrupted by user.")
+    except Exception as scheduler_error:
+        logger.exception(f"[Scheduler] Unexpected runtime error: {scheduler_error}")
 
-def main():
+
+def main() -> None:
     """
-    Main entry point for running the DeltaTI pipeline.
+    Main entry point for the DeltaTI pipeline.
     """
+    logger.info("[Init] DeltaTI is initializing...")
     ensure_data_dir()
     schedule_jobs()
     initial_run()
     run_scheduler()
+
 
 if __name__ == '__main__':
     main()
