@@ -1,0 +1,9 @@
+phishstats:
+  base_url: "https://api.phishstats.info/api/phishing"
+  limit: 100
+  pages: 5
+  queries:
+    - name: general
+      filter: ""
+    - name: facebook
+      filter: "_where=(url,like,~facebook~)&_sort=-id"
