@@ -13,10 +13,7 @@ def timestamped_filename(prefix: str, ext: str = "json") -> str:
     return f"{prefix}_{ts}.{ext}"
 
 def save_to_file(name: str, content, ext: str = "json"):
-    """
-    Saves `content` to DATA_DIR with timestamped filename.
-    If ext=="json", will JSON-dump indent=2; else writes raw text.
-    """
+    
     path = os.path.join(DATA_DIR, timestamped_filename(name, ext))
     with open(path, 'w', encoding='utf-8') as f:
         if ext == "json":

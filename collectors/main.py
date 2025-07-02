@@ -123,8 +123,8 @@ def main() -> None:
     """
     logger.info("[Init] DeltaTI is initializing...")
     ensure_data_dir()
-    schedule_jobs()
     initial_run()
+    schedule_jobs()
     run_scheduler()
 
 

@@ -5,6 +5,7 @@ import base64
 import time
 import requests
 import zipfile
+import gzip
 from requests.exceptions import HTTPError, RequestException
 from utils.config_utils import load_config, ConfigLoadError
 from utils.file_utils import save_to_file
@@ -113,18 +114,39 @@ def fetch_feodo():
         logger.exception("[Feodo] Fetch failed")
 
 
-def fetch_phishtank(): # NOT WORKING EVERY TIME, IT DEPENDS ON THE CONNECTION OF THE SERVER
+def fetch_phishtank():
     logger.info("[PhishTank] Starting fetch...")
-    url = "http://data.phishtank.com/data/online-valid.csv"
+    url = "http://data.phishtank.com/data/online-valid.csv.gz"
     try:
         resp = safe_get(url)
-        if "text/csv" not in resp.headers.get("Content-Type", ""):
-            logger.error(f"[PhishTank] Unexpected content type: {resp.headers.get('Content-Type')}")
+        if resp.status_code != 200:
+            logger.error(f"[PhishTank] Unexpected status code: {resp.status_code}")
             return
-        save_to_file("phishtank", resp.text, "csv")
+
+        ctype = resp.headers.get("Content-Type", "")
+        if "gzip" not in ctype and "application/octet-stream" not in ctype:
+            logger.warning(f"[PhishTank] Unexpected Content-Type: {ctype} — proceeding with decompression anyway.")
+
+        with gzip.GzipFile(fileobj=io.BytesIO(resp.content)) as gz:
+            text = gz.read().decode("utf-8")
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) < 2:
+            logger.error("[PhishTank] CSV appears empty or missing data rows.")
+            return
+
+        header = lines[0].lower()
+        if not header.startswith("phish_id"):
+            logger.error(f"[PhishTank] Unexpected CSV header: {lines[0]}")
+            return
+
+        save_to_file("phishtank", text, "csv")
         logger.info("[PhishTank] Fetch completed successfully.")
+
     except RequestException:
         logger.exception("[PhishTank] Fetch failed")
+    except (gzip.BadGzipFile, UnicodeDecodeError) as e:
+        logger.exception(f"[PhishTank] Decompression or decoding failed: {e}")
 
 
 def fetch_phishstats():
