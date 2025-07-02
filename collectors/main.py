@@ -13,20 +13,23 @@ from pathlib import Path
 from typing import Callable
 import schedule
 
-from collectors.feeds.fetchers import FEED_REGISTRY
-from Normalizer.normalizer import normalize_all
-from collectors.utils.file_utils import ensure_data_dir
-
 # Constants
 SCHEDULE_TIME = "22:00"
 SLEEP_INTERVAL = 30
 HEARTBEAT_INTERVAL = 7200
 
+# --- Set up project root for module imports ---
 try:
     project_root = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(project_root))
 except Exception as e:
     raise RuntimeError("Failed to resolve project root") from e
+
+# --- DeltaTI Module Imports ---
+from collectors.feeds.fetchers import FEED_REGISTRY
+from Normalizer.normalizer import normalize_all
+from collectors.utils.file_utils import ensure_data_dir
+
 
 # --- Configure Logging ---
 logger = logging.getLogger("DeltaTI")
