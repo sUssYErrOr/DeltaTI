@@ -171,11 +171,23 @@ PARSER_REGISTRY = {
 def normalize_all():
     summary = {'total': 0, 'by_source': {}}
     seen = set()
+    now = datetime.now(timezone.utc)
+
     for path in data_dir.iterdir():
-        if not path.is_file(): continue
+        if not path.is_file():
+            continue
+
+        # Skip files older than 5 minutes (adjust if needed)
+        modified_time = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        age_minutes = (now - modified_time).total_seconds() / 60
+        if age_minutes > 5:
+            logger.info(f"Skipping {path.name} (age {age_minutes:.1f} min)")
+            continue
+
         prefix = path.stem.split('_')[0]
         parser = PARSER_REGISTRY.get(prefix, normalize_generic)
         logger.info(f"Normalizing {path.name} (source: {prefix})")
+
         try:
             records = parser(path)
             unique = []
@@ -195,6 +207,7 @@ def normalize_all():
                 logger.info(f"No new indicators in {path.name}")
         except Exception:
             logger.exception(f"Failed to normalize {path.name}")
+
     logger.info(f"Normalization complete: {summary['total']} indicators across {len(summary['by_source'])} sources")
 
 if __name__ == '__main__':
