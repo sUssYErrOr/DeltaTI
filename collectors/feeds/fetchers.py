@@ -30,10 +30,6 @@ except (FileNotFoundError, ConfigLoadError) as e:
 
 
 def safe_get(url, headers=None, retries=3, backoff=2):
-    """
-    GET with retries and exponential backoff on 5xx and 429 errors.
-    Skip retries for other 4xx errors.
-    """
     default_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
@@ -60,7 +56,6 @@ def safe_get(url, headers=None, retries=3, backoff=2):
                 raise
 
 
-
 def fetch_urlhaus_csv_online():
     logger.info("[URLhaus] Starting fetch...")
     url = "https://urlhaus.abuse.ch/downloads/csv_online/"
@@ -74,7 +69,6 @@ def fetch_urlhaus_csv_online():
 
 def fetch_threatfox():
     logger.info("[ThreatFox] Starting ZIP fetch...")
-
     url = "https://threatfox.abuse.ch/export/csv/full/"
     try:
         resp = requests.get(url, timeout=30)
@@ -84,7 +78,6 @@ def fetch_threatfox():
             logger.error(f"[ThreatFox] Unexpected content type: {resp.headers.get('Content-Type')}")
             return
 
-        # Read ZIP into memory
         zip_bytes = io.BytesIO(resp.content)
         with zipfile.ZipFile(zip_bytes, 'r') as zip_ref:
             file_list = zip_ref.namelist()
@@ -97,15 +90,15 @@ def fetch_threatfox():
                 csv_data = csv_file.read().decode("utf-8")
             save_to_file("threatfox_full", csv_data, "csv")
             logger.info(f"[ThreatFox] CSV extracted")
-
     except requests.exceptions.RequestException:
         logger.exception("[ThreatFox] ZIP fetch failed")
     except zipfile.BadZipFile:
         logger.exception("[ThreatFox] Failed to extract ZIP")
 
+
 def fetch_feodo():
     logger.info("[Feodo] Starting fetch...")
-    url = "https://feodotracker.abuse.ch/downloads/ipblocklist_aggressive.txt"
+    url = "https://feodotracker.abuse.ch/downloads/ipblocklist.csv"
     try:
         resp = safe_get(url)
         save_to_file("feodo", resp.text, "txt")
@@ -142,34 +135,46 @@ def fetch_phishtank():
 
         save_to_file("phishtank", text, "csv")
         logger.info("[PhishTank] Fetch completed successfully.")
-
     except RequestException:
         logger.exception("[PhishTank] Fetch failed")
     except (gzip.BadGzipFile, UnicodeDecodeError) as e:
         logger.exception(f"[PhishTank] Decompression or decoding failed: {e}")
 
-
 def fetch_phishstats():
+    seen_ids = set()  # Track unique phishing entry IDs
+
     for q in QUERIES:
         name = q.get("name", "general")
         filt = q.get("filter", "")
-        for page in range(PAGES):
-            start = page * LIMIT
+        for page in range(1, PAGES + 1):
             url = (
-                f"{BASE_URL}?{filt}&_start={start}&_limit={LIMIT}" if filt
-                else f"{BASE_URL}?_start={start}&_limit={LIMIT}"
+                f"{BASE_URL}?{filt}&_page={page}&_perPage={LIMIT}" if filt
+                else f"{BASE_URL}?_page={page}&_perPage={LIMIT}"
             )
-            logger.info(f"[PhishStats] Starting fetch for '{name}', page {page}")
+            logger.info(f"[PhishStats] Fetching '{name}' - page {page}")
             try:
                 resp = safe_get(url)
                 data = resp.json()
-                if not data:
-                    logger.info(f"[PhishStats] No more data for '{name}' at page {page}")
-                    break
-                save_to_file(f"phishstats_{name}", data)
-                logger.info(f"[PhishStats] Fetched and saved '{name}', page {page}")
+
+                # Filter unique entries by ID
+                new_entries = []
+                for entry in data:
+                    pid = entry.get("id")
+                    if pid not in seen_ids:
+                        seen_ids.add(pid)
+                        new_entries.append(entry)
+
+                if not new_entries:
+                    logger.info(f"[PhishStats] All entries already seen for '{name}' - page {page}.")
+                    continue
+
+                save_to_file(f"phishstats_{name}_page{page}", new_entries)
+                logger.info(f"[PhishStats] Saved {len(new_entries)} new unique entries for '{name}', page {page}")
+                time.sleep(1)
+
             except RequestException:
-                logger.exception(f"[PhishStats] Fetch failed for '{name}', page {page}")
+                logger.exception(f"[PhishStats] Failed for '{name}', page {page}")
+
 
 
 def fetch_spamhaus():
@@ -204,28 +209,6 @@ def fetch_ciarmy():
     except RequestException:
         logger.exception("[CI Army] Fetch failed")
 
-'''
-def fetch_abuseipdb(): # NEED SUBSCRIPTION
-    logger.info("[AbuseIPDB] Starting fetch...")
-    api_key = os.getenv("ABUSEIPDB_KEY")
-    if not api_key:
-        logger.error("[AbuseIPDB] No API key found; skipping.")
-        return
-
-    url = "https://api.abuseipdb.com/api/v2/blacklist"
-    headers = {
-        "Key": api_key,
-        "Accept": "application/json"
-    }
-    try:
-        resp = session.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-        save_to_file("abuseipdb", data)
-        logger.info(f"[AbuseIPDB] Fetched {len(data)} entries.")
-    except RequestException:
-        logger.exception("[AbuseIPDB] Fetch failed")
-'''
 
 def fetch_otx():
     logger.info("[OTX] Starting fetch...")
@@ -243,7 +226,6 @@ def fetch_otx():
         logger.exception("[OTX] Fetch failed")
 
 
-
 # Registry of all fetcher jobs
 FEED_REGISTRY = [
     fetch_urlhaus_csv_online,
@@ -254,6 +236,6 @@ FEED_REGISTRY = [
     fetch_spamhaus,
     fetch_emerging_threats,
     fetch_ciarmy,
-    #fetch_abuseipdb,
+    # fetch_abuseipdb,  # Optional paid source
     fetch_otx,
 ]
