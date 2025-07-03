@@ -57,8 +57,8 @@ def safe_get(url, headers=None, retries=3, backoff=2):
 
 
 def fetch_urlhaus_csv_online():
-    logger.info("[URLhaus] Starting fetch...")
-    url = "https://urlhaus.abuse.ch/downloads/csv_online/"
+    logger.info("[URLhaus] Starting fetch...") # every Month
+    url = "https://urlhaus.abuse.ch/downloads/csv_recent/"
     try:
         resp = safe_get(url)
         save_to_file("urlhaus_online", resp.text, "csv")
@@ -67,7 +67,7 @@ def fetch_urlhaus_csv_online():
         logger.exception("[URLhaus] Fetch failed")
 
 
-def fetch_threatfox():
+def fetch_threatfox(): # every 48 hours
     logger.info("[ThreatFox] Starting ZIP fetch...")
     url = "https://threatfox.abuse.ch/export/csv/full/"
     try:
@@ -96,7 +96,7 @@ def fetch_threatfox():
         logger.exception("[ThreatFox] Failed to extract ZIP")
 
 
-def fetch_feodo():
+def fetch_feodo(): # Every Month
     logger.info("[Feodo] Starting fetch...")
     url = "https://feodotracker.abuse.ch/downloads/ipblocklist.csv"
     try:
@@ -177,7 +177,7 @@ def fetch_phishstats():
 
 
 
-def fetch_spamhaus():
+def fetch_spamhaus(): # Daily
     logger.info("[Spamhaus] Starting fetch...")
     url = "https://www.spamhaus.org/drop/drop.txt"
     try:
@@ -188,7 +188,7 @@ def fetch_spamhaus():
         logger.exception("[Spamhaus] Fetch failed")
 
 
-def fetch_emerging_threats():
+def fetch_emerging_threats(): # daily
     logger.info("[Emerging Threats] Starting fetch...")
     url = "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
     try:
@@ -199,7 +199,7 @@ def fetch_emerging_threats():
         logger.exception("[Emerging Threats] Fetch failed")
 
 
-def fetch_ciarmy():
+def fetch_ciarmy(): # Monthly
     logger.info("[CI Army] Starting fetch...")
     url = "https://www.ciarmy.com/list/ci-badguys.txt"
     try:
@@ -210,7 +210,7 @@ def fetch_ciarmy():
         logger.exception("[CI Army] Fetch failed")
 
 
-def fetch_otx():
+def fetch_otx(): # Every 24 hours and make check if the data is the same do not save anything
     logger.info("[OTX] Starting fetch...")
     api_key = get_otx_key()
     url = "https://otx.alienvault.com/api/v1/pulses/subscribed?page=1"

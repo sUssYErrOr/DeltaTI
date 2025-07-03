@@ -15,11 +15,9 @@ logger = logging.getLogger(__name__)
 
 # Directories
 project_root = Path(__file__).parent.parent
-data_dir = project_root / 'collectors' / 'data' / 'feeds'
 normalized_dir = Path(__file__).parent / 'normalized_data'
 normalized_dir.mkdir(parents=True, exist_ok=True)
 
-# Fallback regex patterns
 IOC_PATTERNS = {
     'ipv4-addr': re.compile(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"),
     'url': re.compile(r"\bhttps?://[^\s,'\"]+\b"),
@@ -28,12 +26,10 @@ IOC_PATTERNS = {
     'file-md5': re.compile(r"\b[A-Fa-f0-9]{32}\b")
 }
 
-# Helpers
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def parse_csv(path: Path) -> List[Dict]:
-    """Read CSV into list of dicts, trimming spaces after delimiters."""
     with path.open(newline='', encoding='utf-8') as f:
         return list(csv.DictReader(f, skipinitialspace=True))
 
@@ -44,7 +40,6 @@ def load_json(path: Path) -> Optional[object]:
         logger.warning(f"Invalid JSON in {path.name}")
         return None
 
-# Record builder
 def build_record(indicator: str, ioc_type: str, source: str, raw: Optional[Dict] = None) -> Dict:
     return {
         'indicator': indicator.strip(),
@@ -56,8 +51,6 @@ def build_record(indicator: str, ioc_type: str, source: str, raw: Optional[Dict]
         'tags': [],
         'raw': raw or {}
     }
-
-# Specific normalizers
 
 def normalize_urlhaus(path: Path) -> List[Dict]:
     rows = parse_csv(path)
@@ -79,7 +72,6 @@ def normalize_urlhaus(path: Path) -> List[Dict]:
         records.append(rec)
     return records
 
-
 def normalize_threatfox(path: Path) -> List[Dict]:
     rows = parse_csv(path)
     records: List[Dict] = []
@@ -88,31 +80,25 @@ def normalize_threatfox(path: Path) -> List[Dict]:
         if not val:
             continue
         ioc_type = r.get('ioc_type', 'unknown').lower()
-        # Map ip:port to pure ip
         if ioc_type == 'ip:port':
             val = val.split(':')[0]
             ioc_type = 'ipv4-addr'
         rec = build_record(val, ioc_type, 'threatfox', r)
-        # Confidence
         try:
             rec['confidence'] = int(r.get('confidence_level', 50))
         except (ValueError, TypeError):
             rec['confidence'] = 50
-        # Dates
         first = r.get('first_seen_utc') or r.get('first_seen')
         last = r.get('last_seen_utc') or r.get('last_seen')
         if first:
             rec['first_seen'] = first
         if last:
             rec['last_seen'] = last
-        # Tags
         tags = r.get('tags')
         if tags:
             rec['tags'] = [t.strip() for t in tags.split(',') if t.strip()]
         records.append(rec)
     return records
-
-# Generic
 
 def normalize_txt_list(path: Path, source: str, ioc_type: str = 'ipv4-addr') -> List[Dict]:
     lines = [l.strip() for l in path.read_text(encoding='utf-8').splitlines()
@@ -137,7 +123,6 @@ def normalize_generic(path: Path) -> List[Dict]:
                 records.append(build_record(m, t, path.stem))
     return records
 
-# Other parsers
 def normalize_phishstats(path: Path) -> List[Dict]:
     return normalize_json_list(path, 'phishstats', key='url', ioc_type='url')
 
@@ -154,8 +139,6 @@ def normalize_otx(path: Path) -> List[Dict]:
         records.append(rec)
     return records
 
-# Registry mapping
-# Registry mapping
 PARSER_REGISTRY = {
     'urlhaus': lambda p: normalize_txt_list(p, 'urlhaus', 'url'),
     'threatfox': lambda p: normalize_txt_list(p, 'threatfox'),
@@ -168,22 +151,27 @@ PARSER_REGISTRY = {
     'otx': normalize_otx
 }
 
-def normalize_all():
+def normalize_all(file_paths: List[Path] = None):
+    """
+    If file_paths is given, only normalize those files; otherwise normalize all raw feeds.
+    Skip any file already normalized (filename starts with 'normalized_').
+    """
+    # Determine candidates
+    if file_paths is None:
+        candidates = [
+            p for p in data_dir.iterdir()
+            if p.is_file() and not p.name.startswith("normalized_")
+        ]
+    else:
+        candidates = [
+            p for p in file_paths
+            if p.is_file() and not p.name.startswith("normalized_")
+        ]
+
     summary = {'total': 0, 'by_source': {}}
     seen = set()
-    now = datetime.now(timezone.utc)
 
-    for path in data_dir.iterdir():
-        if not path.is_file():
-            continue
-
-        # Skip files older than 5 minutes (adjust if needed)
-        modified_time = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        age_minutes = (now - modified_time).total_seconds() / 60
-        if age_minutes > 5:
-            logger.info(f"Skipping {path.name} (age {age_minutes:.1f} min)")
-            continue
-
+    for path in candidates:
         prefix = path.stem.split('_')[0]
         parser = PARSER_REGISTRY.get(prefix, normalize_generic)
         logger.info(f"Normalizing {path.name} (source: {prefix})")
@@ -196,6 +184,7 @@ def normalize_all():
                 if key not in seen:
                     seen.add(key)
                     unique.append(rec)
+
             if unique:
                 out = normalized_dir / f"normalized_{path.stem}.json"
                 out.write_text(json.dumps(unique, ensure_ascii=False, indent=2))
@@ -208,7 +197,10 @@ def normalize_all():
         except Exception:
             logger.exception(f"Failed to normalize {path.name}")
 
-    logger.info(f"Normalization complete: {summary['total']} indicators across {len(summary['by_source'])} sources")
+    logger.info(
+        f"Normalization complete: {summary['total']} indicators across {len(summary['by_source'])} sources"
+    )
 
 if __name__ == '__main__':
-    normalize_all()
+    data_dir = project_root / 'collectors' / 'data' / 'feeds'
+    normalize_all(list(data_dir.glob("*")))
