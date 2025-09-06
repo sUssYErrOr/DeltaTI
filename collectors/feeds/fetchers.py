@@ -241,23 +241,23 @@ def extract_iocs_from_text_blob(text: str) -> List[str]:
             found.add(m.strip())
     return sorted(found)
 
+
 def fetch_dshield_openioc():
-    logger.info("[DShield] Starting fetch...")
-    url = "https://www.dshield.org/api/openiocsources/"  # adjust to real endpoint if different
+    logger.info("[DShield] Starting fetch (OpenIOC)...")
+    url = "https://www.dshield.org/api/openiocsources/"
     try:
         resp = safe_get(url)
     except RequestException:
-        logger.exception("[DShield] HTTP error")
+        logger.exception("[DShield] HTTP error (OpenIOC)")
         return
 
     ctype = (resp.headers.get("Content-Type") or "").lower()
-    logger.info(f"[DShield] Content-Type detected: {ctype}")
+    logger.info(f"[DShield OpenIOC] Content-Type detected: {ctype}")
 
     body = resp.content  # bytes
     try:
         if b"<?xml" in body[:200].lower() or "xml" in ctype:
             # Parse XML properly
-            # decode to str for ElementTree
             text = body.decode("utf-8", errors="ignore")
             root = ET.fromstring(text)
             # Walk tree and collect text from elements/attributes
@@ -270,30 +270,30 @@ def fetch_dshield_openioc():
                     blob_parts.append(v)
             blob_text = "\n".join(blob_parts)
             iocs = extract_iocs_from_text_blob(blob_text)
-            logger.info(f"[DShield] Extracted {len(iocs)} IOCs from XML")
+            logger.info(f"[DShield OpenIOC] Extracted {len(iocs)} IOCs from XML")
             if iocs:
-                # Save as plain text, one IOC per line so normalizer can consume
                 save_to_file("dshield_openioc", "\n".join(iocs), "txt")
-                logger.info("[DShield] Saved parsed IOCs to feeds")
+                logger.info("[DShield OpenIOC] Saved parsed IOCs to feeds")
             else:
-                logger.warning("[DShield] No IOCs extracted from XML payload")
+                logger.warning("[DShield OpenIOC] No IOCs extracted from XML payload")
         else:
             # fallback: treat as text and extract IOCs
             text = body.decode("utf-8", errors="ignore")
             iocs = extract_iocs_from_text_blob(text)
-            logger.info(f"[DShield] Content-Type not XML but parsed {len(iocs)} IOCs")
+            logger.info(f"[DShield OpenIOC] Non-XML content, extracted {len(iocs)} IOCs")
             if iocs:
                 save_to_file("dshield_openioc", "\n".join(iocs), "txt")
-                logger.info("[DShield] Saved fallback-parsed IOCs to feeds")
+                logger.info("[DShield OpenIOC] Saved fallback-parsed IOCs to feeds")
             else:
-                logger.warning("[DShield] Fallback extraction found no IOCs")
+                logger.warning("[DShield OpenIOC] No IOCs found in fallback text")
     except ET.ParseError as e:
-        logger.exception(f"[DShield] XML parse error: {e}")
+        logger.exception(f"[DShield OpenIOC] XML parse error: {e}")
     except Exception:
-        logger.exception("[DShield] Unexpected error while parsing")
+        logger.exception("[DShield OpenIOC] Unexpected error while parsing")
 
 
-    logger.info("[DShield] Starting fetch (threatfeeds)…")
+def fetch_dshield_threatfeeds():
+    logger.info("[DShield] Starting fetch (threatfeeds)...")
     url = "https://www.dshield.org/api/threatfeeds/"
     try:
         resp = safe_get(url)
@@ -302,7 +302,7 @@ def fetch_dshield_openioc():
         return
 
     ctype = (resp.headers.get("Content-Type") or "").lower()
-    logger.info(f"[DShield] Content-Type detected: {ctype}")
+    logger.info(f"[DShield Threatfeeds] Content-Type detected: {ctype}")
 
     body = resp.content  # bytes
     try:
@@ -322,26 +322,27 @@ def fetch_dshield_openioc():
             blob_text = "\n".join(blob_parts)
             iocs = extract_iocs_from_text_blob(blob_text)
 
-            logger.info(f"[DShield] Extracted {len(iocs)} IOCs from threatfeeds XML")
+            logger.info(f"[DShield Threatfeeds] Extracted {len(iocs)} IOCs from XML")
             if iocs:
                 save_to_file("dshield_threatfeeds", "\n".join(iocs), "txt")
-                logger.info("[DShield] Saved parsed IOCs to feeds")
+                logger.info("[DShield Threatfeeds] Saved parsed IOCs to feeds")
             else:
-                logger.warning("[DShield] No IOCs found in threatfeeds XML")
+                logger.warning("[DShield Threatfeeds] No IOCs found in XML")
         else:
             # fallback: plain text parsing
             text = body.decode("utf-8", errors="ignore")
             iocs = extract_iocs_from_text_blob(text)
-            logger.info(f"[DShield] Non-XML content, extracted {len(iocs)} IOCs")
+            logger.info(f"[DShield Threatfeeds] Non-XML content, extracted {len(iocs)} IOCs")
             if iocs:
                 save_to_file("dshield_threatfeeds", "\n".join(iocs), "txt")
-                logger.info("[DShield] Saved fallback-parsed IOCs to feeds")
+                logger.info("[DShield Threatfeeds] Saved fallback-parsed IOCs to feeds")
             else:
-                logger.warning("[DShield] No IOCs found in fallback text")
+                logger.warning("[DShield Threatfeeds] No IOCs found in fallback text")
     except ET.ParseError as e:
-        logger.exception(f"[DShield] XML parse error: {e}")
+        logger.exception(f"[DShield Threatfeeds] XML parse error: {e}")
     except Exception:
-        logger.exception("[DShield] Unexpected error while parsing threatfeeds")
+        logger.exception("[DShield Threatfeeds] Unexpected error while parsing")
+
 
 def fetch_bazaar_recent_csv():
     logger.info("[Bazaar] Starting fetch: recent CSV")
@@ -393,7 +394,7 @@ def fetch_malshare_list():
 FEED_REGISTRY = [
     fetch_urlhaus_csv_online,
     fetch_threatfox,
-    fetch_feodo,
+    #fetch_feodo,
     fetch_phishtank,
     fetch_phishstats,
     fetch_spamhaus,
@@ -403,5 +404,6 @@ FEED_REGISTRY = [
     fetch_bazaar_yara_stats,
     fetch_bazaar_recent_csv,
     fetch_dshield_openioc,
+    fetch_dshield_threatfeeds,
     fetch_malshare_list,
 ]

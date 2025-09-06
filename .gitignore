@@ -1,4 +1,5 @@
 .env
 /collectors/data
 /Normalizer/normalized_data
+/scoring/scored_data
 /cache
