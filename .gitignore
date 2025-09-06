@@ -1,3 +1,4 @@
 .env
 /collectors/data
 /Normalizer/normalized_data
+/cache

@@ -1,34 +1,27 @@
 #!/usr/bin/env python3
 """
-main.py - DeltaTI scheduler/runner (async-optimized)
+main.py - DeltaTI scheduler/runner (robustified)
 
 Key improvements:
-- Integrated with async feed fetcher system
-- Maintains existing scheduling and normalization logic
-- Added performance monitoring and better error handling
-- Supports priority-based feed execution
-- Maintains backward compatibility with existing normalizer
+- avoids duplicate scheduling/log lines (schedule.clear + single logger handler),
+- checks/creates feed & normalized directories,
+- detects whether normalize_all accepts a list of Paths and calls it accordingly,
+- skips re-normalizing files for which normalized output already exists,
+- clearer logging and small helper functions.
 """
 import sys
 import time
 import logging
 import inspect
-import asyncio
 from pathlib import Path
-from typing import Callable, List, Set, Optional
+from typing import Callable, List, Set
 import schedule
-from datetime import datetime, timedelta
 
 # --- project root and imports for your package ---
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-# Import the new async fetcher system
-from collectors.feeds.fetchers import (
-    FeedFetcher, FEED_JOBS, FeedJob, 
-    fetch_all_feeds, run_feed_collection,
-    PerformanceMonitor
-)
+from collectors.feeds.fetchers import FEED_REGISTRY
 from Normalizer.normalizer import normalize_all
 from collectors.utils.file_utils import ensure_data_dir
 
@@ -55,8 +48,6 @@ NORMALIZED_DIR = project_root / "Normalizer" / "normalized_data"
 FEEDS_DIR.mkdir(parents=True, exist_ok=True)
 NORMALIZED_DIR.mkdir(parents=True, exist_ok=True)
 
-# Performance monitoring
-perf_monitor = PerformanceMonitor()
 
 # --- Helpers ---
 def list_raw_files() -> Set[str]:
@@ -87,7 +78,6 @@ def _call_normalize(paths: List[Path]) -> None:
     Call normalize_all either with a list of Path objects (if supported)
     or with no args (fallback).
     """
-    start_time = time.time()
     try:
         sig = inspect.signature(normalize_all)
         if len(sig.parameters) == 0:
@@ -96,12 +86,6 @@ def _call_normalize(paths: List[Path]) -> None:
         else:
             logger.debug("[Normalize] normalize_all() accepts args — calling with paths")
             normalize_all(paths)  # type: ignore[arg-type]
-        
-        # Record performance
-        duration = time.time() - start_time
-        perf_monitor.record_timing("normalize", duration)
-        logger.info(f"[Normalize] Completed in {duration:.2f}s")
-        
     except Exception:
         # best-effort fallback to no-arg call
         try:
@@ -111,38 +95,26 @@ def _call_normalize(paths: List[Path]) -> None:
             raise
 
 
-# --- Core pipeline (updated for async) ---
-async def run_async_pipeline(job_names: List[str] = None, priority_filter: Optional[int] = None) -> None:
+# --- Core pipeline ---
+def run_pipeline(job_name: str) -> None:
     """
-    Run async fetcher jobs, then normalize newly created files.
+    Run one fetcher job, then normalize newly created files (skip already-normalized).
     """
-    logger.info(f"[Pipeline] Starting async pipeline")
-    before = list_raw_files()
-    start_time = time.time()
-
-    try:
-        if job_names:
-            # Run specific jobs
-            async with FeedFetcher() as fetcher:
-                jobs_to_run = [job for job in FEED_JOBS if job.name in job_names]
-                if priority_filter:
-                    jobs_to_run = [job for job in jobs_to_run if job.priority <= priority_filter]
-                
-                tasks = [fetcher.run_job(job) for job in jobs_to_run]
-                await asyncio.gather(*tasks, return_exceptions=True)
-        else:
-            # Run all feeds with optional priority filter
-            await fetch_all_feeds(priority_filter)
-        
-        duration = time.time() - start_time
-        perf_monitor.record_timing("fetch_all", duration)
-        logger.info(f"[Pipeline] Async fetch completed in {duration:.2f}s")
-        
-    except Exception as e:
-        logger.exception(f"[Pipeline] Async fetch failed: {e}")
+    job = next((j for j in FEED_REGISTRY if j.__name__ == job_name), None)
+    if not job:
+        logger.error(f"[Error] No such job in FEED_REGISTRY: {job_name}")
         return
 
-    # Check what files were created
+    logger.info(f"[Fetch] Starting {job_name}")
+    before = list_raw_files()
+
+    try:
+        job()
+        logger.info(f"[Fetch] Completed {job_name}")
+    except Exception as e:
+        logger.exception(f"[Fetch] {job_name} failed: {e}")
+        return
+
     after = list_raw_files()
     created = sorted(after - before)  # filenames
 
@@ -156,55 +128,18 @@ async def run_async_pipeline(job_names: List[str] = None, priority_filter: Optio
             to_normalize.append(FEEDS_DIR / fname)
 
     if not to_normalize:
-        logger.info(f"[Pipeline] No new un-normalized files — skipping normalization")
+        logger.info(f"[Normalize] No new un-normalized files from {job_name} — skipping normalization")
         return
 
-    logger.info(f"[Pipeline] Normalizing {len(to_normalize)} new file(s)")
+    logger.info(f"[Normalize] Normalizing {len(to_normalize)} new file(s) from {job_name}")
     try:
         _call_normalize(to_normalize)
-        logger.info(f"[Pipeline] Finished normalization")
+        logger.info(f"[Normalize] Finished normalization for files from {job_name}")
     except Exception as e:
-        logger.exception(f"[Pipeline] Normalization failed: {e}")
+        logger.exception(f"[Normalize] Normalization failed for {job_name}: {e}")
 
 
-def run_pipeline_sync(job_names: List[str] = None, priority_filter: Optional[int] = None) -> None:
-    """
-    Synchronous wrapper for async pipeline
-    """
-    try:
-        asyncio.run(run_async_pipeline(job_names, priority_filter))
-    except Exception as e:
-        logger.exception(f"[Pipeline] Pipeline execution failed: {e}")
-
-
-# --- Individual job runners for backward compatibility ---
-def run_individual_job(job_name: str) -> None:
-    """
-    Run a single job by name (for backward compatibility with scheduler)
-    """
-    logger.info(f"[Job] Running individual job: {job_name}")
-    
-    # Map old function names to new job names
-    job_mapping = {
-        "fetch_urlhaus_csv_online": "urlhaus",
-        "fetch_threatfox": "threatfox",
-        "fetch_feodo": "feodo",
-        "fetch_phishtank": "phishtank",
-        "fetch_phishstats": "phishstats",
-        "fetch_spamhaus": "spamhaus",
-        "fetch_emerging_threats": "emerging_threats",
-        "fetch_ciarmy": "ciarmy",
-        "fetch_otx": "otx",
-        "fetch_dshield_openioc": "dshield",
-        "fetch_bazaar_recent_csv": "bazaar",
-        "fetch_malshare_list": "malshare",
-    }
-    
-    new_job_name = job_mapping.get(job_name, job_name)
-    run_pipeline_sync([new_job_name])
-
-
-# --- Scheduling (updated for async) ---
+# --- Scheduling ---
 def schedule_jobs() -> None:
     """
     Schedule jobs with the cadence you defined:
@@ -217,53 +152,33 @@ def schedule_jobs() -> None:
     schedule.clear()
 
     logger.info("[Scheduler] Setting up job intervals…")
+    scheduled = set()
 
-    def monthly_wrapper(job_names: List[str]):
+    def monthly_wrapper(fn_name: str):
         def wrapper():
             # run only on day 1 of month
             if time.localtime().tm_mday == 1:
-                run_pipeline_sync(job_names)
+                run_pipeline(fn_name)
             else:
-                logger.debug(f"[Scheduler] Skipping monthly jobs {job_names} (today != 1)")
+                logger.debug(f"[Scheduler] Skipping monthly job {fn_name} (today != 1)")
         return wrapper
 
-    def daily_wrapper(job_names: List[str]):
-        def wrapper():
-            run_pipeline_sync(job_names)
-        return wrapper
+    for job in FEED_REGISTRY:
+        name = job.__name__
+        if name in scheduled:
+            continue
+        scheduled.add(name)
 
-    def priority_wrapper(priority: int):
-        def wrapper():
-            run_pipeline_sync(priority_filter=priority)
-        return wrapper
-
-    # Group jobs by schedule type
-    monthly_jobs = ["urlhaus", "feodo", "ciarmy"]
-    daily_high_priority = ["phishtank", "spamhaus", "emerging_threats"]
-    daily_medium_priority = ["phishstats", "otx", "dshield"]
-    daily_low_priority = ["bazaar", "malshare"]
-
-    # Schedule monthly jobs
-    schedule.every().day.at(SCHEDULE_TIME).do(monthly_wrapper(monthly_jobs))
-    logger.info(f" • Monthly jobs {monthly_jobs}: monthly (day=1 @ {SCHEDULE_TIME})")
-
-    # Schedule ThreatFox every 48 hours
-    schedule.every(48).hours.do(daily_wrapper(["threatfox"]))
-    logger.info(f" • threatfox: every 48 hours")
-
-    # Schedule daily jobs by priority
-    schedule.every().day.at(SCHEDULE_TIME).do(daily_wrapper(daily_high_priority))
-    logger.info(f" • High priority jobs {daily_high_priority}: daily @ {SCHEDULE_TIME}")
-
-    # Stagger medium priority jobs 30 minutes later
-    medium_time = (datetime.strptime(SCHEDULE_TIME, "%H:%M") + timedelta(minutes=30)).strftime("%H:%M")
-    schedule.every().day.at(medium_time).do(daily_wrapper(daily_medium_priority))
-    logger.info(f" • Medium priority jobs {daily_medium_priority}: daily @ {medium_time}")
-
-    # Stagger low priority jobs 1 hour later
-    low_time = (datetime.strptime(SCHEDULE_TIME, "%H:%M") + timedelta(hours=1)).strftime("%H:%M")
-    schedule.every().day.at(low_time).do(daily_wrapper(daily_low_priority))
-    logger.info(f" • Low priority jobs {daily_low_priority}: daily @ {low_time}")
+        if name in {"fetch_urlhaus_csv_online", "fetch_feodo", "fetch_ciarmy"}:
+            schedule.every().day.at(SCHEDULE_TIME).do(monthly_wrapper(name))
+            logger.info(f" • {name}: monthly (day=1 @ {SCHEDULE_TIME})")
+        elif name == "fetch_threatfox":
+            # schedule every 48 hours
+            schedule.every(48).hours.do(lambda n=name: run_pipeline(n))
+            logger.info(f" • {name}: every 48 hours")
+        else:
+            schedule.every().day.at(SCHEDULE_TIME).do(lambda n=name: run_pipeline(n))
+            logger.info(f" • {name}: daily @ {SCHEDULE_TIME}")
 
     logger.info("[Scheduler] Job scheduling complete.")
 
@@ -271,34 +186,10 @@ def schedule_jobs() -> None:
 def initial_run() -> None:
     """
     Run one fetch+normalize for every feed at startup.
-    Run high priority feeds first, then others.
     """
     logger.info("[Startup] Running initial collection + normalization for all feeds…")
-    
-    # Run high priority feeds first
-    logger.info("[Startup] Running high priority feeds (priority 1)")
-    run_pipeline_sync(priority_filter=1)
-    
-    # Brief pause between priority levels
-    time.sleep(5)
-    
-    # Run medium priority feeds
-    logger.info("[Startup] Running medium priority feeds (priority 2)")
-    run_pipeline_sync(priority_filter=2)
-    
-    # Brief pause
-    time.sleep(5)
-    
-    # Run low priority feeds
-    logger.info("[Startup] Running low priority feeds (priority 3)")
-    run_pipeline_sync(priority_filter=3)
-    
-    # Log performance summary
-    summary = perf_monitor.get_summary()
-    if summary:
-        logger.info("[Startup] Performance Summary:")
-        for operation, stats in summary.items():
-            logger.info(f"  {operation}: {stats['count']} runs, avg {stats['avg']:.2f}s, total {stats['total']:.2f}s")
+    for job in FEED_REGISTRY:
+        run_pipeline(job.__name__)
 
 
 def run_scheduler() -> None:
@@ -311,60 +202,20 @@ def run_scheduler() -> None:
     try:
         while True:
             schedule.run_pending()
-            
-            # Emit heartbeat with performance stats
             if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
-                summary = perf_monitor.get_summary()
-                total_ops = sum(stats['count'] for stats in summary.values()) if summary else 0
-                logger.info(f"[Heartbeat] Scheduler alive — {total_ops} operations completed since startup")
+                logger.info("[Heartbeat] Scheduler alive — collector/normalizer healthy")
                 last_heartbeat = time.time()
-            
             time.sleep(SLEEP_INTERVAL)
-            
     except KeyboardInterrupt:
         logger.info("[Shutdown] Interrupted by user")
-        # Log final performance summary
-        summary = perf_monitor.get_summary()
-        if summary:
-            logger.info("[Shutdown] Final Performance Summary:")
-            for operation, stats in summary.items():
-                logger.info(f"  {operation}: {stats['count']} runs, avg {stats['avg']:.2f}s")
-                
     except Exception as e:
         logger.exception(f"[Scheduler] Unexpected runtime error: {e}")
 
 
-# --- CLI support ---
 def main() -> None:
-    """Main entry point"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="DeltaTI Feed Collector")
-    parser.add_argument("--no-initial", action="store_true", 
-                       help="Skip initial run of all feeds")
-    parser.add_argument("--priority", type=int, choices=[1, 2, 3],
-                       help="Run only feeds with specified priority or higher")
-    parser.add_argument("--jobs", nargs="+",
-                       help="Run specific jobs by name")
-    parser.add_argument("--once", action="store_true",
-                       help="Run once and exit (don't start scheduler)")
-    
-    args = parser.parse_args()
-    
     logger.info("[Init] DeltaTI starting")
     ensure_data_dir()   # from collectors.utils.file_utils
-    
-    if args.once:
-        # Run once and exit
-        if args.jobs:
-            run_pipeline_sync(args.jobs, args.priority)
-        else:
-            run_pipeline_sync(priority_filter=args.priority)
-        return
-    
-    if not args.no_initial:
-        initial_run()
-    
+    initial_run()
     schedule_jobs()
     run_scheduler()
 
