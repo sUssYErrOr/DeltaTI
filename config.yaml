@@ -1,7 +1,7 @@
 phishstats:
   base_url: "https://api.phishstats.info/api/phishing"
   limit: 500
-  pages: 4
+  pages: 1
   queries:
     - name: general
       filter: ""
@@ -9,9 +9,4 @@ phishstats:
       filter: "_where=(url,like,~facebook~)&_sort=-id"
     - name: google
       filter: "_where=(url,like,~google~)&_sort=-id"
-    - name: youtube
-      filter: "_where=(url,like,~youtube~)&_sort=-id"
-    - name: blockchain
-      filter: "_where=(url,like,~blockchain~)&_sort=-id"
-    - name: paypal
-      filter: "_where=(url,like,~paypal~)&_sort=-id"
+      
