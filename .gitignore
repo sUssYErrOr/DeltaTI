@@ -1,9 +1,15 @@
+# Environment files
 .env
+
+# Data directories
 /collectors/data
 /Normalizer/normalized_data
 /scoring/scored_data
 /cache
-/feeds/__pycache__
-/utils/__pycache__
-/scoring/__pycache__
-/Normalizer/__pycache__
+
+# Python cache files
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
