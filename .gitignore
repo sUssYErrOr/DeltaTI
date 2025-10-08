@@ -3,3 +3,7 @@
 /Normalizer/normalized_data
 /scoring/scored_data
 /cache
+/feeds/__pycache__
+/utils/__pycache__
+/scoring/__pycache__
+/Normalizer/__pycache__
